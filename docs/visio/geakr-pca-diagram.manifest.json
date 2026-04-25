@@ -1,0 +1,61 @@
+{
+  "diagram_title": "GEAkr + PCA Architecture Flow",
+  "version": "0.1",
+  "notation": "layered-flow",
+  "classification": "Unclassified / Non classifié",
+  "audience": "EA / TPO / ARB",
+  "style": "DTB-clean-light",
+  "canvas": {
+    "width": 1600,
+    "height": 900,
+    "orientation": "landscape"
+  },
+  "layers": [
+    {
+      "id": "capture",
+      "title": "Capture & Intake",
+      "nodes": ["Mobile Share", "Manual Folder Input", "Registered Sources"]
+    },
+    {
+      "id": "context",
+      "title": "GEAkr Context Pattern",
+      "nodes": ["sources.txt", "briefing.md", "notes.md", "GEAKR_INSTRUCTIONS.md"]
+    },
+    {
+      "id": "safety",
+      "title": "Safety & Runtime Policy",
+      "nodes": ["Sanitization Gate", "Runtime Mode Check", "Data Sharing Boundary"]
+    },
+    {
+      "id": "knowledge",
+      "title": "Knowledge & Graph",
+      "nodes": ["Structured Output", "Knowledge Files", "Graph Fragments"]
+    },
+    {
+      "id": "intelligence",
+      "title": "Graph Intelligence",
+      "nodes": ["Search Index", "Convergence", "Conflict Detection", "Chad Mode"]
+    },
+    {
+      "id": "enterprise",
+      "title": "Enterprise Path",
+      "nodes": ["EA / TPO Review", "Approved Runtime", "HC Data Platform"]
+    }
+  ],
+  "relationships": [
+    { "from": "Mobile Share", "to": "Sanitization Gate", "label": "capture" },
+    { "from": "Registered Sources", "to": "sources.txt", "label": "register" },
+    { "from": "GEAKR_INSTRUCTIONS.md", "to": "Runtime Mode Check", "label": "policy" },
+    { "from": "Sanitization Gate", "to": "Runtime Mode Check", "label": "screen" },
+    { "from": "Runtime Mode Check", "to": "Structured Output", "label": "approved payload" },
+    { "from": "Structured Output", "to": "Knowledge Files", "label": "render" },
+    { "from": "Structured Output", "to": "Graph Fragments", "label": "derive" },
+    { "from": "Graph Fragments", "to": "Search Index", "label": "index" },
+    { "from": "Knowledge Files", "to": "Convergence", "label": "analyze" },
+    { "from": "Convergence", "to": "Conflict Detection", "label": "validate" },
+    { "from": "Conflict Detection", "to": "Chad Mode", "label": "EA lens" },
+    { "from": "Chad Mode", "to": "EA / TPO Review", "label": "decision signals" },
+    { "from": "EA / TPO Review", "to": "Approved Runtime", "label": "mature" },
+    { "from": "Approved Runtime", "to": "HC Data Platform", "label": "align" }
+  ]
+}
