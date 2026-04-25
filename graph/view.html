@@ -7,94 +7,138 @@
   <style>
     html, body { height: 100%; margin: 0; font-family: -apple-system, system-ui, Segoe UI, Roboto, Arial; }
     #toolbar { padding: 8px; background: #f4f6f7; display: flex; gap: 8px; align-items: center; }
-    #cy { width: 100%; height: calc(100% - 44px); }
-    select, input { padding: 6px; border-radius: 6px; border: 1px solid #ccc; }
+    #cy { width: 100%; height: calc(100% - 60px); }
+    input { padding: 6px; border-radius: 6px; border: 1px solid #ccc; width: 260px; }
+
+    #results {
+      position: absolute;
+      top: 50px;
+      left: 10px;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      max-height: 200px;
+      overflow: auto;
+      width: 260px;
+      z-index: 10;
+    }
+
+    .result-item { padding: 6px; cursor: pointer; }
+    .result-item:hover { background: #eee; }
+
+    #details {
+      position: absolute;
+      right: 10px;
+      top: 50px;
+      width: 300px;
+      background: #fff;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 10px;
+      max-height: 300px;
+      overflow: auto;
+      z-index: 10;
+    }
   </style>
   <script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
 </head>
 <body>
-  <div id="toolbar">
-    <input type="file" id="fileInput" accept="application/json" />
-    <select id="branchFilter">
-      <option value="all">All branches</option>
-      <option value="main">main</option>
-      <option value="work/geakr-enterprise">work</option>
-      <option value="personal/pca">pca</option>
-    </select>
-    <select id="typeFilter">
-      <option value="all">All types</option>
-      <option value="concept">Concept</option>
-      <option value="knowledge">Knowledge</option>
-      <option value="response">Response</option>
-      <option value="source">Source</option>
-    </select>
-  </div>
-  <div id="cy"></div>
 
-  <script>
-    let cy;
+<div id="toolbar">
+  <input type="file" id="fileInput" />
+  <input type="text" id="search" placeholder="Search concepts..." />
+</div>
 
-    function initGraph(data) {
-      cy = cytoscape({
-        container: document.getElementById('cy'),
-        elements: data,
-        style: [
-          {
-            selector: 'node',
-            style: {
-              'label': 'data(label)',
-              'font-size': 10,
-              'background-color': '#3D8589'
-            }
-          },
-          {
-            selector: 'node[type="concept"]',
-            style: { 'background-color': '#A6CE39' }
-          },
-          {
-            selector: 'node[type="source"]',
-            style: { 'background-color': '#888' }
-          },
-          {
-            selector: 'edge',
-            style: {
-              'width': 1,
-              'line-color': '#ccc'
-            }
-          }
-        ],
-        layout: { name: 'cose' }
-      });
-    }
+<div id="results"></div>
+<div id="details"></div>
+<div id="cy"></div>
 
-    document.getElementById('fileInput').addEventListener('change', function (e) {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function (evt) {
-        const graph = JSON.parse(evt.target.result);
-        const elements = [
-          ...graph.nodes.map(n => ({ data: n })),
-          ...graph.edges.map(e => ({ data: e }))
-        ];
-        initGraph(elements);
-      };
-      reader.readAsText(file);
-    });
+<script>
+let cy;
+let indexData = [];
 
-    function applyFilters() {
-      const branch = document.getElementById('branchFilter').value;
-      const type = document.getElementById('typeFilter').value;
+function initGraph(elements) {
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements,
+    style: [
+      { selector: 'node', style: { label: 'data(label)', 'font-size': 10, 'background-color': '#3D8589' } },
+      { selector: 'node[type="concept"]', style: { 'background-color': '#A6CE39' } },
+      { selector: 'node[type="source"]', style: { 'background-color': '#888' } },
+      { selector: 'edge', style: { width: 1, 'line-color': '#ccc' } }
+    ],
+    layout: { name: 'cose' }
+  });
+}
 
-      cy.nodes().forEach(n => {
-        const showBranch = branch === 'all' || n.data('branch') === branch;
-        const showType = type === 'all' || n.data('type') === type;
-        n.style('display', showBranch && showType ? 'element' : 'none');
-      });
-    }
+document.getElementById('fileInput').addEventListener('change', function(e) {
+  const file = e.target.files[0];
+  if (!file) return;
 
-    document.getElementById('branchFilter').addEventListener('change', applyFilters);
-    document.getElementById('typeFilter').addEventListener('change', applyFilters);
-  </script>
+  const reader = new FileReader();
+  reader.onload = function(evt) {
+    const graph = JSON.parse(evt.target.result);
+    const elements = [
+      ...graph.nodes.map(n => ({ data: n })),
+      ...graph.edges.map(e => ({ data: e }))
+    ];
+    initGraph(elements);
+  };
+  reader.readAsText(file);
+});
+
+async function loadIndex() {
+  const res = await fetch('search-index.json');
+  indexData = (await res.json()).items;
+}
+
+function search(q) {
+  q = q.toLowerCase();
+  return indexData
+    .filter(i => i.search_text.includes(q))
+    .slice(0, 8);
+}
+
+document.getElementById('search').addEventListener('input', function(e) {
+  const q = e.target.value;
+  const results = search(q);
+  const box = document.getElementById('results');
+
+  box.innerHTML = '';
+
+  results.forEach(r => {
+    const div = document.createElement('div');
+    div.className = 'result-item';
+    div.textContent = r.label;
+    div.onclick = () => selectNode(r);
+    box.appendChild(div);
+  });
+});
+
+function selectNode(r) {
+  const node = cy.getElementById(r.id);
+
+  cy.animate({
+    center: { eles: node },
+    zoom: 1.6,
+    duration: 500
+  });
+
+  const d = document.getElementById('details');
+
+  d.innerHTML = `
+    <b>${r.label}</b><br><br>
+    <b>Type:</b> ${r.type}<br>
+    <b>Branch:</b> ${r.branch}<br>
+    <b>Status:</b> ${r.status}<br>
+    <b>Confidence:</b> ${r.confidence || 'n/a'}<br><br>
+    <b>Issues:</b><br>
+    ${(r.issues.length ? r.issues.map(i => '- ' + i.problem).join('<br>') : 'None')}
+  `;
+}
+
+loadIndex();
+</script>
+
 </body>
 </html>
