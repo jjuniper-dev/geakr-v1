@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GEAkr Graph Viewer</title>
+  <style>
+    html, body { height: 100%; margin: 0; font-family: -apple-system, system-ui, Segoe UI, Roboto, Arial; }
+    #toolbar { padding: 8px; background: #f4f6f7; display: flex; gap: 8px; align-items: center; }
+    #cy { width: 100%; height: calc(100% - 44px); }
+    select, input { padding: 6px; border-radius: 6px; border: 1px solid #ccc; }
+  </style>
+  <script src="https://unpkg.com/cytoscape@3.26.0/dist/cytoscape.min.js"></script>
+</head>
+<body>
+  <div id="toolbar">
+    <input type="file" id="fileInput" accept="application/json" />
+    <select id="branchFilter">
+      <option value="all">All branches</option>
+      <option value="main">main</option>
+      <option value="work/geakr-enterprise">work</option>
+      <option value="personal/pca">pca</option>
+    </select>
+    <select id="typeFilter">
+      <option value="all">All types</option>
+      <option value="concept">Concept</option>
+      <option value="knowledge">Knowledge</option>
+      <option value="response">Response</option>
+      <option value="source">Source</option>
+    </select>
+  </div>
+  <div id="cy"></div>
+
+  <script>
+    let cy;
+
+    function initGraph(data) {
+      cy = cytoscape({
+        container: document.getElementById('cy'),
+        elements: data,
+        style: [
+          {
+            selector: 'node',
+            style: {
+              'label': 'data(label)',
+              'font-size': 10,
+              'background-color': '#3D8589'
+            }
+          },
+          {
+            selector: 'node[type="concept"]',
+            style: { 'background-color': '#A6CE39' }
+          },
+          {
+            selector: 'node[type="source"]',
+            style: { 'background-color': '#888' }
+          },
+          {
+            selector: 'edge',
+            style: {
+              'width': 1,
+              'line-color': '#ccc'
+            }
+          }
+        ],
+        layout: { name: 'cose' }
+      });
+    }
+
+    document.getElementById('fileInput').addEventListener('change', function (e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function (evt) {
+        const graph = JSON.parse(evt.target.result);
+        const elements = [
+          ...graph.nodes.map(n => ({ data: n })),
+          ...graph.edges.map(e => ({ data: e }))
+        ];
+        initGraph(elements);
+      };
+      reader.readAsText(file);
+    });
+
+    function applyFilters() {
+      const branch = document.getElementById('branchFilter').value;
+      const type = document.getElementById('typeFilter').value;
+
+      cy.nodes().forEach(n => {
+        const showBranch = branch === 'all' || n.data('branch') === branch;
+        const showType = type === 'all' || n.data('type') === type;
+        n.style('display', showBranch && showType ? 'element' : 'none');
+      });
+    }
+
+    document.getElementById('branchFilter').addEventListener('change', applyFilters);
+    document.getElementById('typeFilter').addEventListener('change', applyFilters);
+  </script>
+</body>
+</html>
