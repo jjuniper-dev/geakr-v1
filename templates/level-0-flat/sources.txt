@@ -1,0 +1,9 @@
+# Sources
+
+Add project source links and reference notes here.
+
+Format suggestion:
+- [Source title] - [URL] - [short note about why it matters]
+
+Example:
+- Project overview page - https://example.com/project - Main orientation reference
