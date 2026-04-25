@@ -1,6 +1,7 @@
 import express from 'express';
 import axios from 'axios';
 import cheerio from 'cheerio';
+import crypto from 'crypto';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -14,7 +15,22 @@ function slugify(s) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)+/g, '')
-    .slice(0, 80) || 'untitled';
+    .slice(0, 70) || 'untitled';
+}
+
+function today() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function shortHash(s) {
+  return crypto.createHash('sha256').update(s).digest('hex').slice(0, 8);
+}
+
+function buildFilename(title, url) {
+  const date = today();
+  const slug = slugify(title || url);
+  const hash = shortHash(url);
+  return `${date}-${slug}-${hash}.md`;
 }
 
 async function fetchReadable(url) {
@@ -30,7 +46,7 @@ async function callLLM({ url, title, text }) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('Missing OPENAI_API_KEY');
 
-  const prompt = `Extract structured knowledge from the provided webpage content.\n\nReturn EXACTLY in this Markdown template (no extra prose):\n\n# ${title || '<Title>'}\n\nsource: ${url}\nsource_type: government_policy\nstatus: extracted\nlast_updated: ${new Date().toISOString().slice(0,10)}\nconfidence: medium\n\n---\n\n## Summary\n- ...\n- ...\n- ...\n\n## Key Points\n### 1. ...\n- ...\n\n### 2. ...\n- ...\n\n### 3. ...\n- ...\n\n---\n\n## Architecture Implications\n- ...\n\n## GEAkr Implications\n- ...\n\n## Constraints / Risks\n- ...\n`;
+  const prompt = `Extract structured knowledge from the provided webpage content.\n\nReturn EXACTLY in this Markdown template (no extra prose):\n\n# ${title || '<Title>'}\n\nsource: ${url}\nsource_type: government_policy\nstatus: extracted\nlast_updated: ${today()}\nconfidence: medium\n\n---\n\n## Summary\n- ...\n- ...\n- ...\n\n## Key Points\n### 1. ...\n- ...\n\n### 2. ...\n- ...\n\n### 3. ...\n- ...\n\n---\n\n## Architecture Implications\n- ...\n\n## GEAkr Implications\n- ...\n\n## Constraints / Risks\n- ...\n`;
 
   const resp = await axios.post(
     `${OPENAI_BASE_URL}/chat/completions`,
@@ -67,7 +83,8 @@ async function writeToGitHub({ content, filename }) {
   const path = `${basePath}/${filename}`;
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
 
-  // Get existing SHA if file exists
+  // Each capture should be its own file. If the same URL is captured again on the same day,
+  // GitHub will update the deterministic file instead of appending to a giant file.
   let sha = undefined;
   try {
     const get = await axios.get(url, { headers: { Authorization: `Bearer ${token}` } });
@@ -77,7 +94,7 @@ async function writeToGitHub({ content, filename }) {
   }
 
   const body = {
-    message: 'Add knowledge file from mobile capture',
+    message: `Capture knowledge: ${filename}`,
     content: Buffer.from(content).toString('base64'),
     branch,
     ...(sha ? { sha } : {})
@@ -90,7 +107,7 @@ async function writeToGitHub({ content, filename }) {
     }
   });
 
-  return { path, commit: put.data.commit?.sha };
+  return { path, commit: put.data.commit?.sha, updatedExistingFile: Boolean(sha) };
 }
 
 app.post('/extract', async (req, res) => {
@@ -101,7 +118,7 @@ app.post('/extract', async (req, res) => {
     const { title, text } = await fetchReadable(url);
     const markdown = await callLLM({ url, title, text });
 
-    const filename = `${slugify(title || url)}.md`;
+    const filename = buildFilename(title, url);
 
     let github = null;
     if (writeToGitHub) {
