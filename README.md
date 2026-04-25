@@ -18,6 +18,18 @@ The value is not tied to one platform. The value is the consistent structure:
 - a place for generated or extracted content
 - an instructions file that tells the chatbot how to use the project context
 
+## Concept map
+
+GEAkr separates the pattern from the mechanisms that may support it:
+
+- GEAkr = context pattern
+- Projects = persistence mechanism
+- Connectors = access mechanism
+- GitHub = version/control mechanism
+- CI/CD = validation/automation mechanism
+
+A chatbot project feature is not required. GEAkr can be used at runtime by pasting, uploading, or referencing the relevant instruction and context files. Project features are useful when persistent context is available, but they are optional.
+
 ## Usage modes
 
 GEAkr can be used in several ways depending on available tools, connectors, and permissions.
