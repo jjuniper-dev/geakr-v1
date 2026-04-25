@@ -8,6 +8,8 @@ At its simplest, GEAkr is a logical folder structure plus instructions. The stru
 
 GEAkr is intentionally storage-agnostic. A user or team can place the structure wherever it is most useful, including SharePoint, Google Drive, Dropbox, Git, OneDrive, a local folder, or a ChatGPT project context.
 
+Teams can start with a simple folder. If they need governance, traceability, or automation, the same pattern can move into GitHub.
+
 The value is not tied to one platform. The value is the consistent structure:
 
 - a place for source references
