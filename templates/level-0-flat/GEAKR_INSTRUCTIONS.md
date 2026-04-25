@@ -10,7 +10,7 @@ Start with:
 
 1. `sources.txt` — registered project URLs and references
 2. `briefing.md` — current project briefing or orientation notes
-3. `files_index.txt` — list of supporting files expected in the folder
+3. `files_index.md` — list of supporting files expected in the folder
 4. `notes.md` — working notes and assumptions
 
 If a registered URL cannot be accessed directly, use the locally saved file, extract, or summary where available.
