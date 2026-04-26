@@ -2,13 +2,16 @@ import express from 'express';
 import axios from 'axios';
 import cheerio from 'cheerio';
 import crypto from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
 import OpenAI from 'openai';
+import { evaluatePolicyGate, OPERATIONS } from './policy/gate.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static('public'));
 
-const CAPTURE_PIPELINE_VERSION = '0.3.0-sanitized-structured-capture';
+const CAPTURE_PIPELINE_VERSION = '0.4.0-policy-gated-capture';
 const SANITIZER_VERSION = '0.1.0-regex-risk-gate';
 const GRAPH_FRAGMENT_VERSION = '0.1.0-capture-fragment';
 
@@ -20,6 +23,34 @@ function today() { return new Date().toISOString().slice(0, 10); }
 function shortHash(s) { return crypto.createHash('sha256').update(s).digest('hex').slice(0, 8); }
 function hash12(s) { return crypto.createHash('sha256').update(s).digest('hex').slice(0, 12); }
 function buildFilename(title, url) { return `${today()}-${slugify(title || url)}-${shortHash(url)}.md`; }
+
+function sanitizerSeverity(type) {
+  if (['credit_card_like_number', 'bearer_token', 'api_key_like_value', 'sin_like_number'].includes(type)) return 'high';
+  if (['email', 'phone'].includes(type)) return 'medium';
+  return 'low';
+}
+
+function getRuntimeConfig(reqBody = {}) {
+  return {
+    mode: reqBody.runtimeMode || process.env.RUNTIME_MODE || 'metadata_only',
+    hosting: process.env.RUNTIME_HOSTING || 'other',
+    endpoint: process.env.RUNTIME_ENDPOINT || 'openai_api'
+  };
+}
+
+function getSourceConfig(reqBody = {}) {
+  return {
+    classification: reqBody.sourceClassification || 'unknown',
+    contextLayer: reqBody.contextLayer || 'personal'
+  };
+}
+
+async function appendGateAudit(auditEntry) {
+  const dir = path.join(process.cwd(), 'audit', 'gate-decisions');
+  await fs.mkdir(dir, { recursive: true });
+  const file = path.join(dir, `${today()}.jsonl`);
+  await fs.appendFile(file, `${JSON.stringify(auditEntry)}\n`, 'utf-8');
+}
 
 async function fetchReadable(url) {
   const { data } = await axios.get(url, { timeout: 15000 });
@@ -43,25 +74,17 @@ function sanitizeText(input) {
   ];
   for (const r of replacements) {
     const matches = text.match(r.regex) || [];
-    if (matches.length) findings.push({ type: r.name, count: matches.length });
+    if (matches.length) findings.push({ category: r.name, severity: sanitizerSeverity(r.name), count: matches.length });
     text = text.replace(r.regex, r.repl);
   }
-  const highRisk = findings.some(f => ['credit_card_like_number','bearer_token','api_key_like_value'].includes(f.type));
-  return { version: SANITIZER_VERSION, text, findings, highRisk, safeToSendExternal: !highRisk };
+  return { version: SANITIZER_VERSION, text, findings };
 }
 
 const knowledgeSchema = { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, source_type: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] }, summary: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 6 }, key_points: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 }, architecture_implications: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, geakr_implications: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, constraints_risks: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, concepts: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 } }, required: ['title','source_type','confidence','summary','key_points','architecture_implications','geakr_implications','constraints_risks','concepts'] };
 
-async function extractStructured({ url, title, text }) {
-  const sanitized = sanitizeText(text);
-  if (!sanitized.safeToSendExternal && process.env.ALLOW_HIGH_RISK_EXTERNAL !== 'true') {
-    const err = new Error('Sanitizer blocked model call because high-risk content was detected.');
-    err.sanitizer = sanitized;
-    throw err;
-  }
+async function invokeExternalStructuredExtraction({ url, title, sanitized }) {
   const completion = await client.chat.completions.create({ model: OPENAI_MODEL, messages: [ { role: 'system', content: 'Extract only from provided sanitized content. Do not infer unsupported facts. Return JSON only.' }, { role: 'user', content: `URL: ${url}\nPage title: ${title}\nPipeline version: ${CAPTURE_PIPELINE_VERSION}\nSanitizer findings: ${JSON.stringify(sanitized.findings)}\n\nContent:\n${sanitized.text}` } ], temperature: 0.1, response_format: { type: 'json_schema', json_schema: { name: 'geakr_knowledge_extraction', strict: true, schema: knowledgeSchema } } });
-  const parsed = JSON.parse(completion.choices[0].message.content);
-  return { structured: parsed, sanitizer: sanitized };
+  return JSON.parse(completion.choices[0].message.content);
 }
 
 function list(items) { return items.map(x => `- ${x}`).join('\n'); }
@@ -71,7 +94,68 @@ function buildGraphFragment(data, { url, filename }) { const knowledgeId = `know
 
 async function writeToGitHub({ content, filename, basePathOverride }) { const token = process.env.GITHUB_TOKEN; const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPO; const branch = process.env.GITHUB_BRANCH || 'main'; const basePath = basePathOverride || process.env.KNOWLEDGE_PATH || 'knowledge'; if (!token || !owner || !repo) return null; const filePath = `${basePath}/${filename}`; const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`; let sha; try { const existing = await axios.get(apiUrl, { headers: { Authorization: `Bearer ${token}` } }); sha = existing.data.sha; } catch (_) {} const put = await axios.put(apiUrl, { message: `Capture artifact: ${filename}`, content: Buffer.from(content).toString('base64'), branch, ...(sha ? { sha } : {}) }, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }); return { path: filePath, commit: put.data.commit?.sha, updatedExistingFile: Boolean(sha) }; }
 
-app.post('/extract', async (req, res) => { try { const { url, writeToGitHub: shouldWrite = false, writeGraphFragment = true } = req.body || {}; if (!url) return res.status(400).json({ ok: false, error: 'Missing url' }); const { title, text } = await fetchReadable(url); const { structured, sanitizer } = await extractStructured({ url, title, text }); const filename = buildFilename(structured.title || title, url); const markdown = renderKnowledgeMarkdown(structured, { url, sanitizer }); const graphFragment = buildGraphFragment(structured, { url, filename }); const graphFilename = filename.replace(/\.md$/, '.graph.json'); let github = null, graphGithub = null; if (shouldWrite) { github = await writeToGitHub({ content: markdown, filename }); if (writeGraphFragment) graphGithub = await writeToGitHub({ content: JSON.stringify(graphFragment, null, 2), filename: graphFilename, basePathOverride: process.env.GRAPH_FRAGMENTS_PATH || 'graph/fragments' }); } res.json({ ok: true, capture_pipeline_version: CAPTURE_PIPELINE_VERSION, title: structured.title, filename, structured, markdown, graphFragment, graphFilename, sanitizer: { version: sanitizer.version, findings: sanitizer.findings, safeToSendExternal: sanitizer.safeToSendExternal }, github, graphGithub }); } catch (e) { res.status(500).json({ ok: false, capture_pipeline_version: CAPTURE_PIPELINE_VERSION, error: e.message, sanitizer: e.sanitizer ? { version: e.sanitizer.version, findings: e.sanitizer.findings, safeToSendExternal: e.sanitizer.safeToSendExternal } : undefined }); } });
+app.post('/extract', async (req, res) => {
+  try {
+    const { url, writeToGitHub: shouldWrite = false, writeGraphFragment = true, userOverride } = req.body || {};
+    if (!url) return res.status(400).json({ ok: false, error: 'Missing url' });
+
+    const { title, text } = await fetchReadable(url);
+    const sanitized = sanitizeText(text);
+    const source = getSourceConfig(req.body || {});
+    const runtime = getRuntimeConfig(req.body || {});
+
+    const gateDecision = evaluatePolicyGate({
+      source: { url, classification: source.classification, contextLayer: source.contextLayer },
+      runtime,
+      sanitizer: { version: sanitized.version, findings: sanitized.findings },
+      userOverride
+    });
+
+    await appendGateAudit(gateDecision.auditEntry);
+
+    if (gateDecision.decision === 'BLOCK') {
+      return res.status(200).json({
+        ok: true,
+        status: 'blocked',
+        capture_pipeline_version: CAPTURE_PIPELINE_VERSION,
+        title,
+        url,
+        message: gateDecision.reason,
+        allowedOperations: gateDecision.allowedOperations,
+        audit: gateDecision.auditEntry,
+        metadata: { url, title }
+      });
+    }
+
+    if (!gateDecision.allowedOperations.includes(OPERATIONS.INVOKE_EXTERNAL_API)) {
+      return res.status(200).json({
+        ok: true,
+        status: 'local_or_metadata_only',
+        capture_pipeline_version: CAPTURE_PIPELINE_VERSION,
+        title,
+        url,
+        message: 'Policy gate did not permit external API invocation.',
+        allowedOperations: gateDecision.allowedOperations,
+        audit: gateDecision.auditEntry,
+        metadata: { url, title }
+      });
+    }
+
+    const structured = await invokeExternalStructuredExtraction({ url, title, sanitized });
+    const filename = buildFilename(structured.title || title, url);
+    const markdown = renderKnowledgeMarkdown(structured, { url, sanitizer: sanitized });
+    const graphFragment = buildGraphFragment(structured, { url, filename });
+    const graphFilename = filename.replace(/\.md$/, '.graph.json');
+    let github = null, graphGithub = null;
+    if (shouldWrite) {
+      github = await writeToGitHub({ content: markdown, filename });
+      if (writeGraphFragment) graphGithub = await writeToGitHub({ content: JSON.stringify(graphFragment, null, 2), filename: graphFilename, basePathOverride: process.env.GRAPH_FRAGMENTS_PATH || 'graph/fragments' });
+    }
+    res.json({ ok: true, status: 'extracted', capture_pipeline_version: CAPTURE_PIPELINE_VERSION, title: structured.title, filename, structured, markdown, graphFragment, graphFilename, sanitizer: { version: sanitized.version, findings: sanitized.findings }, gate: { decision: gateDecision.decision, effectiveMode: gateDecision.effectiveMode, allowedOperations: gateDecision.allowedOperations, reason: gateDecision.reason }, github, graphGithub });
+  } catch (e) {
+    res.status(500).json({ ok: false, capture_pipeline_version: CAPTURE_PIPELINE_VERSION, error: e.message });
+  }
+});
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Server running on :${port} (${CAPTURE_PIPELINE_VERSION})`));
