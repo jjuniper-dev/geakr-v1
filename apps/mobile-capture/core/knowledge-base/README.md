@@ -85,6 +85,72 @@ results.results.forEach(doc => {
 });
 ```
 
+### Retrieve with Policy Enforcement
+
+Documents can be filtered by policy to enforce runtime mode restrictions:
+
+```javascript
+const results = await rag.retrieve(
+  'How do I configure Kubernetes networking?',
+  {
+    topK: 5,
+    teamId: 'platform',
+    // NEW: Add policy enforcement context
+    enforcementContext: {
+      runtimeMode: 'approved_enterprise', // or 'external_api_public_only', etc.
+      userId: 'alice@example.com',
+      captureId: 'capture-123', // Links to main policy gate decision
+      sourceClassification: 'work'
+    }
+  }
+);
+
+// Response includes policy information
+if (results.policyEnforced) {
+  console.log(`Policy decision: ${results.policyDecision}`);
+  console.log(`Allowed: ${results.results.length}, Blocked: ${results.policyDetails.blockedCount}`);
+}
+```
+
+## Policy Enforcement (Phase 6)
+
+RAG retrieval can be gated by runtime policy to restrict access to classified documents.
+
+### Classification Levels
+
+Documents are classified by sensitivity:
+- `public` — No restrictions, accessible in all modes
+- `unknown` — Default, treated as public
+- `work` — Internal team documents, restricted to enterprise modes
+- `personal` — Never shared via RAG
+
+### Runtime Mode Access Rules
+
+| Mode | Public | Unknown | Work | Personal |
+|------|--------|---------|------|----------|
+| `metadata_only` | ❌ | ❌ | ❌ | ❌ |
+| `local_only` | ✅ | ✅ | ❌ | ❌ |
+| `local_llm` | ✅ | ✅ | ❌ | ❌ |
+| `external_api_public_only` | ✅ | ✅ | ❌ | ❌ |
+| `approved_enterprise` | ✅ | ✅ | ✅ | ❌ |
+
+### Policy Enforcement Flow
+
+1. **Pre-Retrieval Gate**: In `metadata_only` mode, returns empty immediately
+2. **Document Retrieval**: Executes normal semantic search
+3. **Classification Filtering**: Filters results by allowed classifications
+4. **Audit Logging**: Records all policy decisions and document access
+5. **Response**: Returns filtered results with policy decision details
+
+### Audit Logging
+
+When policy is enforced, audit entries are logged with:
+- Query (truncated to 200 chars)
+- Runtime mode and user ID
+- Document counts before/after filtering
+- Blocked classifications
+- Policy decision (ALLOW, PARTIAL, or BLOCK)
+
 ## Configuration
 
 ### Environment Variables

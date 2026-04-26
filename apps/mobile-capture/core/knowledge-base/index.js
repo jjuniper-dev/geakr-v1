@@ -3,6 +3,7 @@ import { FileStore } from './storage/file-store.js';
 import { OpenAIEmbedder } from './embedding/openai-embedder.js';
 import { Retriever } from './retrieval/retriever.js';
 import { DocumentLoader } from './ingestion/document-loader.js';
+import { enforceRAGPolicy } from './policy-gate.js';
 
 let ragInstance = null;
 
@@ -36,6 +37,7 @@ export class RAG {
     this.embedder = null;
     this.retriever = null;
     this.loader = null;
+    this.auditLogger = config.auditLogger || null;
   }
 
   async initialize() {
@@ -156,9 +158,42 @@ export class RAG {
         filters: options.filters
       });
 
+      // Apply policy enforcement if enforcementContext provided
+      let policyEnforced = false;
+      let policyDecision = null;
+      let policyDetails = null;
+
+      if (options.enforcementContext && options.enforcementContext.runtimeMode) {
+        const policyResult = await enforceRAGPolicy(
+          {
+            runtimeMode: options.enforcementContext.runtimeMode,
+            userId: options.enforcementContext.userId,
+            captureId: options.enforcementContext.captureId,
+            sourceClassification: options.enforcementContext.sourceClassification,
+            query
+          },
+          result.results,
+          this.auditLogger
+        );
+
+        policyEnforced = true;
+        policyDecision = policyResult.policyDecision;
+        policyDetails = {
+          decision: policyResult.policyDecision,
+          reason: policyResult.decisionReason,
+          blockedCount: policyResult.blockedCount,
+          blockedClassifications: policyResult.blockedClassifications
+        };
+
+        // Replace results with policy-filtered results
+        result.results = policyResult.filtered;
+        result.resultCount = policyResult.filtered.length;
+      }
+
       return {
         ok: true,
-        ...result
+        ...result,
+        ...(policyEnforced && { policyEnforced, policyDecision, policyDetails })
       };
     } catch (error) {
       return {
