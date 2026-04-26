@@ -9,6 +9,7 @@ import { enforcePolicy } from './core/control-plane/policy-enforcer.js';
 import { buildContext, addTraceEntry } from './core/control-plane/execution-context.js';
 import { execute as controlPlaneExecute } from './core/control-plane/index.js';
 import { initializeAdapter, getProvider } from './core/llm-adapter/index.js';
+import { audit } from './core/audit-compliance/index.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -164,7 +165,9 @@ const knowledgeSchema = { type: 'object', additionalProperties: false, propertie
 
 async function invokeExternalStructuredExtraction({ url, title, sanitized }) {
   const provider = getProvider();
-  return await provider.structuredExtract({
+  const startTime = Date.now();
+
+  const result = await provider.structuredExtract({
     schema: knowledgeSchema,
     messages: [
       {
@@ -178,6 +181,21 @@ async function invokeExternalStructuredExtraction({ url, title, sanitized }) {
     ],
     temperature: 0.1
   });
+
+  const duration = Date.now() - startTime;
+
+  await audit.logLLMCall({
+    provider: provider.name,
+    model: provider.model,
+    operation: 'structuredExtract',
+    inputTokens: 0,
+    outputTokens: 0,
+    costEstimate: 0,
+    userId: 'anonymous',
+    duration
+  });
+
+  return result;
 }
 
 function list(items) { return items.map(x => `- ${x}`).join('\n'); }
@@ -219,6 +237,7 @@ app.post('/extract', authMiddleware, async (req, res) => {
     const gateDecision = await enforcePolicy(context);
 
     await appendGateAudit(gateDecision.auditEntry);
+    await audit.logGateDecision(gateDecision.auditEntry);
 
     if (gateDecision.decision === 'BLOCK') {
       return res.status(200).json({
