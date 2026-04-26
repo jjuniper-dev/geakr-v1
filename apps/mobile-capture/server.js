@@ -15,8 +15,85 @@ const CAPTURE_PIPELINE_VERSION = '0.4.0-policy-gated-capture';
 const SANITIZER_VERSION = '0.1.0-regex-risk-gate';
 const GRAPH_FRAGMENT_VERSION = '0.1.0-capture-fragment';
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+const VALID_OPENAI_MODELS = ['gpt-4-turbo', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'];
+const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
+
+let client = null;
+
+function validateConfig() {
+  const errors = [];
+
+  if (!process.env.OPENAI_API_KEY) {
+    errors.push('OPENAI_API_KEY is required');
+  }
+
+  if (!VALID_OPENAI_MODELS.includes(OPENAI_MODEL)) {
+    errors.push(`OPENAI_MODEL must be one of: ${VALID_OPENAI_MODELS.join(', ')}. Got: ${OPENAI_MODEL}`);
+  }
+
+  if (!process.env.GEAKR_API_KEY) {
+    console.warn('⚠️  GEAKR_API_KEY not set. /extract endpoint will be public (not recommended for production)');
+  }
+
+  if (errors.length > 0) {
+    console.error('❌ Configuration errors:');
+    errors.forEach(e => console.error(`  - ${e}`));
+    process.exit(1);
+  }
+
+  client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  console.log(`✓ Config validated. Using model: ${OPENAI_MODEL}`);
+}
+
+const requestCounts = new Map();
+const RATE_LIMIT_WINDOW = 60000;
+const RATE_LIMIT_MAX_REQUESTS = 100;
+
+function cleanupOldCounts() {
+  const now = Date.now();
+  for (const [key, timestamps] of requestCounts.entries()) {
+    const filtered = timestamps.filter(t => now - t < RATE_LIMIT_WINDOW);
+    if (filtered.length === 0) {
+      requestCounts.delete(key);
+    } else {
+      requestCounts.set(key, filtered);
+    }
+  }
+}
+
+function rateLimitMiddleware(req, res, next) {
+  const clientIp = req.ip || req.socket.remoteAddress;
+  const now = Date.now();
+
+  if (!requestCounts.has(clientIp)) {
+    requestCounts.set(clientIp, []);
+  }
+
+  const timestamps = requestCounts.get(clientIp);
+  timestamps.push(now);
+
+  if (timestamps.length > RATE_LIMIT_MAX_REQUESTS) {
+    return res.status(429).json({ ok: false, error: 'Rate limit exceeded. Max 100 requests per minute.' });
+  }
+
+  if (Math.random() < 0.01) cleanupOldCounts();
+
+  next();
+}
+
+function authMiddleware(req, res, next) {
+  const apiKey = req.headers['x-api-key'];
+  const requiredKey = process.env.GEAKR_API_KEY;
+
+  if (requiredKey && (!apiKey || apiKey !== requiredKey)) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized. Provide valid X-API-Key header.' });
+  }
+
+  next();
+}
+
+app.use(rateLimitMiddleware);
 
 function slugify(s) { return (s || 'untitled').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '').slice(0, 70) || 'untitled'; }
 function today() { return new Date().toISOString().slice(0, 10); }
@@ -94,7 +171,7 @@ function buildGraphFragment(data, { url, filename }) { const knowledgeId = `know
 
 async function writeToGitHub({ content, filename, basePathOverride }) { const token = process.env.GITHUB_TOKEN; const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPO; const branch = process.env.GITHUB_BRANCH || 'main'; const basePath = basePathOverride || process.env.KNOWLEDGE_PATH || 'knowledge'; if (!token || !owner || !repo) return null; const filePath = `${basePath}/${filename}`; const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`; let sha; try { const existing = await axios.get(apiUrl, { headers: { Authorization: `Bearer ${token}` } }); sha = existing.data.sha; } catch (_) {} const put = await axios.put(apiUrl, { message: `Capture artifact: ${filename}`, content: Buffer.from(content).toString('base64'), branch, ...(sha ? { sha } : {}) }, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }); return { path: filePath, commit: put.data.commit?.sha, updatedExistingFile: Boolean(sha) }; }
 
-app.post('/extract', async (req, res) => {
+app.post('/extract', authMiddleware, async (req, res) => {
   try {
     const { url, writeToGitHub: shouldWrite = false, writeGraphFragment = true, userOverride } = req.body || {};
     if (!url) return res.status(400).json({ ok: false, error: 'Missing url' });
@@ -157,5 +234,18 @@ app.post('/extract', async (req, res) => {
   }
 });
 
+validateConfig();
+
 const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on :${port} (${CAPTURE_PIPELINE_VERSION})`));
+app.listen(port, () => {
+  console.log(`\n🚀 GEAkr Mobile Capture Server Ready`);
+  console.log(`   Version: ${CAPTURE_PIPELINE_VERSION}`);
+  console.log(`   Model: ${OPENAI_MODEL}`);
+  console.log(`   Port: ${port}`);
+  if (process.env.GEAKR_API_KEY) {
+    console.log(`   Auth: Enabled (X-API-Key required)`);
+  } else {
+    console.log(`   Auth: DISABLED (endpoint is public)`);
+  }
+  console.log();
+});
