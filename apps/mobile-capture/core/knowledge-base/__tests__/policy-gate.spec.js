@@ -295,5 +295,62 @@ describe('RAG Policy Gate', () => {
         );
       }).rejects.toThrow('Unknown runtime mode');
     });
+
+    it('handles synchronous logger without throwing', async () => {
+      const syncLogger = {
+        log: (entry) => {
+          // Synchronous logger that returns undefined
+          return undefined;
+        }
+      };
+
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await enforceRAGPolicy(
+        {
+          runtimeMode: 'approved_enterprise',
+          userId: 'user-123',
+          captureId: 'capture-456',
+          sourceClassification: 'work',
+          query: 'test'
+        },
+        testDocs,
+        syncLogger
+      );
+
+      expect(result.filtered).toBeDefined();
+      expect(result.filtered.length).toBeGreaterThan(0);
+
+      consoleSpy.mockRestore();
+    });
+
+    it('handles logger that throws synchronously', async () => {
+      const throwingLogger = {
+        log: () => {
+          throw new Error('Logger crashed');
+        }
+      };
+
+      const consoleSpy = jest.spyOn(console, 'warn').mockImplementation();
+
+      const result = await enforceRAGPolicy(
+        {
+          runtimeMode: 'approved_enterprise',
+          userId: 'user-123',
+          captureId: 'capture-456',
+          sourceClassification: 'work',
+          query: 'test'
+        },
+        testDocs,
+        throwingLogger
+      );
+
+      expect(result.filtered).toBeDefined();
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Error calling audit logger')
+      );
+
+      consoleSpy.mockRestore();
+    });
   });
 });

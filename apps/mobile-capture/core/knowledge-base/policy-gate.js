@@ -145,11 +145,16 @@ export async function enforceRAGPolicy(context, documents, auditLogger = null) {
     decisionReason
   });
 
-  // Log to audit system (async, non-blocking)
+  // Log to audit system (async, non-blocking) - guard against sync/async logger failures
   if (auditLogger && typeof auditLogger.log === 'function') {
-    auditLogger.log(auditEntry).catch(err => {
-      console.warn('Failed to log RAG policy audit:', err.message);
-    });
+    try {
+      Promise.resolve(auditLogger.log(auditEntry)).catch(err => {
+        console.warn('Failed to log RAG policy audit:', err.message);
+      });
+    } catch (err) {
+      // Synchronous error in logger - don't let it bubble up (graceful degradation)
+      console.warn('Error calling audit logger:', err.message);
+    }
   }
 
   return {

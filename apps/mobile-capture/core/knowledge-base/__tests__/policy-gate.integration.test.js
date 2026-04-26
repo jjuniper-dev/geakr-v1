@@ -358,4 +358,41 @@ describe('RAG Policy Gate Integration', () => {
       }
     }
   });
+
+  it('short-circuits metadata_only without calling retriever', async () => {
+    // Create a spy on the retriever to verify it's not called
+    const originalRetrieve = rag.retriever.retrieve;
+    let retrieverCalled = false;
+    rag.retriever.retrieve = async () => {
+      retrieverCalled = true;
+      return originalRetrieve.call(rag.retriever, 'test', {});
+    };
+
+    await rag.ingest({
+      documents: [
+        {
+          title: 'Test Doc',
+          content: 'Test content',
+          classification: 'public'
+        }
+      ]
+    });
+
+    const result = await rag.retrieve('sensitive query', {
+      enforcementContext: {
+        runtimeMode: 'metadata_only',
+        userId: 'user-123',
+        captureId: 'capture-456'
+      }
+    });
+
+    // Verify retriever was NOT called (short-circuited)
+    expect(retrieverCalled).toBe(false);
+    // Verify empty result returned
+    expect(result.results).toHaveLength(0);
+    expect(result.policyDecision).toBe('BLOCK');
+
+    // Restore original
+    rag.retriever.retrieve = originalRetrieve;
+  });
 });
