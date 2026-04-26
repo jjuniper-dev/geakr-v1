@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 
-export const RUNTIME_POLICY_GATE_VERSION = '0.1.0-spec';
+export const RUNTIME_POLICY_GATE_VERSION = '0.1.1-spec';
 
 export const RUNTIME_MODES = [
   'metadata_only',
@@ -30,6 +30,18 @@ export const HOSTING_TYPES = [
   'other'
 ];
 
+export const APPROVED_HOSTING_TYPES = ['azure_approved'];
+
+export const OPERATIONS = Object.freeze({
+  STORE_METADATA: 'store_metadata',
+  STORE_LOCAL_CONTENT: 'store_local_content',
+  INVOKE_LOCAL_LLM: 'invoke_local_llm',
+  INVOKE_EXTERNAL_API: 'invoke_external_api',
+  INVOKE_ENTERPRISE_ENDPOINT: 'invoke_enterprise_endpoint'
+});
+
+const EXTERNAL_MODES = new Set(['external_api_public_only', 'approved_enterprise']);
+
 const MODE_RANK = Object.freeze({
   metadata_only: 0,
   local_only: 1,
@@ -51,7 +63,7 @@ function normalizeClassification(classification) {
 }
 
 function normalizeContextLayer(contextLayer) {
-  return CONTEXT_LAYERS.includes(contextLayer) ? contextLayer : 'public';
+  return CONTEXT_LAYERS.includes(contextLayer) ? contextLayer : 'personal';
 }
 
 function normalizeHosting(hosting) {
@@ -77,17 +89,37 @@ function isDowngradeOrSame(targetMode, currentMode) {
   return MODE_RANK[targetMode] <= MODE_RANK[currentMode];
 }
 
+function operationsForMode(mode) {
+  switch (mode) {
+    case 'metadata_only':
+      return [OPERATIONS.STORE_METADATA];
+    case 'local_only':
+      return [OPERATIONS.STORE_METADATA, OPERATIONS.STORE_LOCAL_CONTENT];
+    case 'local_llm':
+      return [OPERATIONS.STORE_METADATA, OPERATIONS.STORE_LOCAL_CONTENT, OPERATIONS.INVOKE_LOCAL_LLM];
+    case 'external_api_public_only':
+      return [OPERATIONS.STORE_METADATA, OPERATIONS.INVOKE_EXTERNAL_API];
+    case 'approved_enterprise':
+      return [OPERATIONS.STORE_METADATA, OPERATIONS.INVOKE_ENTERPRISE_ENDPOINT];
+    default:
+      return [];
+  }
+}
+
 function buildAuditEntry({
   captureId,
   sourceUrl,
   sourceClassification,
+  contextLayer,
   runtimeMode,
   runtimeHosting,
+  runtimeEndpoint,
   sanitizerVersion,
   sanitizerFindings,
   userOverride,
   decision,
   decisionReason,
+  allowedOperations,
   downgradeToMode
 }) {
   return {
@@ -96,8 +128,10 @@ function buildAuditEntry({
     capture_id: captureId || uuid(),
     source_url: sourceUrl || '',
     source_classification: sourceClassification,
+    context_layer: contextLayer,
     runtime_mode: runtimeMode,
     runtime_hosting: runtimeHosting,
+    runtime_endpoint: runtimeEndpoint || '',
     sanitizer_version: sanitizerVersion || 'unknown',
     sanitizer_findings: sanitizerFindings,
     user_override: {
@@ -107,6 +141,7 @@ function buildAuditEntry({
     },
     decision,
     decision_reason: decisionReason,
+    allowed_operations: allowedOperations || [],
     downgrade_to_mode: downgradeToMode || null,
     gate_version: RUNTIME_POLICY_GATE_VERSION
   };
@@ -116,6 +151,7 @@ function makeDecision({
   decision,
   effectiveMode,
   reason,
+  allowedOperations = [],
   downgradeToMode = null,
   normalized,
   userOverrideAudit = null
@@ -124,13 +160,16 @@ function makeDecision({
     captureId: normalized.captureId,
     sourceUrl: normalized.source.url,
     sourceClassification: normalized.source.classification,
+    contextLayer: normalized.source.contextLayer,
     runtimeMode: normalized.runtime.mode,
     runtimeHosting: normalized.runtime.hosting,
+    runtimeEndpoint: normalized.runtime.endpoint,
     sanitizerVersion: normalized.sanitizer.version,
     sanitizerFindings: normalized.sanitizer.findings,
     userOverride: userOverrideAudit,
     decision,
     decisionReason: reason,
+    allowedOperations,
     downgradeToMode
   });
 
@@ -138,6 +177,7 @@ function makeDecision({
     decision,
     effectiveMode,
     reason,
+    allowedOperations,
     auditEntry
   };
 }
@@ -200,10 +240,10 @@ function validateOverride(normalized) {
 }
 
 function hostingAllowsApprovedEnterprise(normalized) {
-  return normalized.runtime.mode === 'approved_enterprise' && normalized.runtime.hosting === 'azure_approved';
+  return normalized.runtime.mode === 'approved_enterprise' && APPROVED_HOSTING_TYPES.includes(normalized.runtime.hosting);
 }
 
-export function evaluatePolicyGate(input = {}) {
+function evaluatePolicyGateUnsafe(input = {}) {
   const normalized = normalizeInput(input);
 
   if (!input.sanitizer || !input.sanitizer.version || !Array.isArray(input.sanitizer.findings)) {
@@ -249,20 +289,22 @@ export function evaluatePolicyGate(input = {}) {
     });
   }
 
-  if (severity === 'medium') {
-    const overrideAllowsMedium = Boolean(
-      normalized.userOverride?.reason &&
-      normalized.runtime.mode !== 'approved_enterprise' &&
-      effectiveMode === normalized.runtime.mode
-    );
-
-    if (!overrideAllowsMedium) {
+  if (severity === 'medium' && EXTERNAL_MODES.has(effectiveMode)) {
+    if (effectiveMode === 'approved_enterprise') {
       return makeDecision({
         decision: 'BLOCK',
         effectiveMode,
-        reason: normalized.runtime.mode === 'approved_enterprise'
-          ? 'medium-severity sanitizer finding blocked in approved_enterprise'
-          : 'medium-severity sanitizer finding requires explicit override',
+        reason: 'medium-severity sanitizer finding blocked in approved_enterprise',
+        normalized,
+        userOverrideAudit: overrideAudit
+      });
+    }
+
+    if (!normalized.userOverride?.reason) {
+      return makeDecision({
+        decision: 'BLOCK',
+        effectiveMode,
+        reason: 'medium-severity sanitizer finding requires explicit override',
         normalized,
         userOverrideAudit: overrideAudit
       });
@@ -272,10 +314,10 @@ export function evaluatePolicyGate(input = {}) {
   switch (effectiveMode) {
     case 'metadata_only':
       return makeDecision({
-        decision: 'DOWNGRADE',
+        decision: 'BLOCK',
         effectiveMode: 'metadata_only',
-        reason: 'metadata_only mode stores metadata without model call',
-        downgradeToMode: 'metadata_only',
+        reason: 'metadata_only mode — metadata stored, no external transmission',
+        allowedOperations: operationsForMode('metadata_only'),
         normalized,
         userOverrideAudit: overrideAudit
       });
@@ -285,6 +327,7 @@ export function evaluatePolicyGate(input = {}) {
         decision: 'ALLOW',
         effectiveMode: 'local_only',
         reason: 'local_only mode allows local storage only',
+        allowedOperations: operationsForMode('local_only'),
         normalized,
         userOverrideAudit: overrideAudit
       });
@@ -294,6 +337,7 @@ export function evaluatePolicyGate(input = {}) {
         decision: 'ALLOW',
         effectiveMode: 'local_llm',
         reason: 'local_llm mode allows local model inference only',
+        allowedOperations: operationsForMode('local_llm'),
         normalized,
         userOverrideAudit: overrideAudit
       });
@@ -312,6 +356,7 @@ export function evaluatePolicyGate(input = {}) {
         decision: 'ALLOW',
         effectiveMode,
         reason: 'public source allowed for external_api_public_only',
+        allowedOperations: operationsForMode('external_api_public_only'),
         normalized,
         userOverrideAudit: overrideAudit
       });
@@ -339,6 +384,7 @@ export function evaluatePolicyGate(input = {}) {
         decision: 'ALLOW',
         effectiveMode,
         reason: 'approved_enterprise source and hosting allowed',
+        allowedOperations: operationsForMode('approved_enterprise'),
         normalized,
         userOverrideAudit: overrideAudit
       });
@@ -351,6 +397,20 @@ export function evaluatePolicyGate(input = {}) {
         normalized,
         userOverrideAudit: overrideAudit
       });
+  }
+}
+
+export function evaluatePolicyGate(input = {}) {
+  try {
+    return evaluatePolicyGateUnsafe(input);
+  } catch (error) {
+    const normalized = normalizeInput(input);
+    return makeDecision({
+      decision: 'BLOCK',
+      effectiveMode: 'metadata_only',
+      reason: `gate exception: ${error.message}`,
+      normalized
+    });
   }
 }
 
