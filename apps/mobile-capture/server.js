@@ -11,6 +11,7 @@ import { execute as controlPlaneExecute } from './core/control-plane/index.js';
 import { initializeAdapter, getProvider } from './core/llm-adapter/index.js';
 import { audit } from './core/audit-compliance/index.js';
 import { fetchReadable, sanitizeText, renderKnowledgeMarkdown, buildGraphFragment } from './core/baseline/index.js';
+import AssessPlugin from './plugins/assess/index.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -243,6 +244,99 @@ app.post('/extract', authMiddleware, async (req, res) => {
       if (writeGraphFragment) graphGithub = await writeToGitHub({ content: JSON.stringify(graphFragment, null, 2), filename: graphFilename, basePathOverride: process.env.GRAPH_FRAGMENTS_PATH || 'graph/fragments' });
     }
     res.json({ ok: true, status: 'extracted', capture_pipeline_version: CAPTURE_PIPELINE_VERSION, title: structured.title, filename, structured, markdown, graphFragment, graphFilename, sanitizer: { version: sanitized.version, findings: sanitized.findings }, gate: { decision: gateDecision.decision, effectiveMode: gateDecision.effectiveMode, allowedOperations: gateDecision.allowedOperations, reason: gateDecision.reason }, github, graphGithub });
+  } catch (e) {
+    res.status(500).json({ ok: false, capture_pipeline_version: CAPTURE_PIPELINE_VERSION, error: e.message });
+  }
+});
+
+app.post('/extract-and-assess', authMiddleware, async (req, res) => {
+  try {
+    const { url, writeToGitHub: shouldWrite = false, writeGraphFragment = true, userOverride } = req.body || {};
+    if (!url) return res.status(400).json({ ok: false, error: 'Missing url' });
+
+    const { title, text } = await fetchReadable(url);
+    const sanitized = sanitizeText(text);
+    const source = getSourceConfig(req.body || {});
+    const runtime = getRuntimeConfig(req.body || {});
+
+    const context = buildContext({
+      req: { userOverride },
+      sanitized,
+      runtime,
+      source: { url, ...source }
+    });
+
+    const gateDecision = await enforcePolicy(context);
+    await appendGateAudit(gateDecision.auditEntry);
+    await audit.logGateDecision(gateDecision.auditEntry);
+
+    if (gateDecision.decision === 'BLOCK') {
+      return res.status(200).json({
+        ok: true,
+        status: 'blocked',
+        capture_pipeline_version: CAPTURE_PIPELINE_VERSION,
+        title,
+        url,
+        message: gateDecision.reason,
+        allowedOperations: gateDecision.allowedOperations,
+        audit: gateDecision.auditEntry,
+        metadata: { url, title }
+      });
+    }
+
+    if (!gateDecision.allowedOperations.includes(OPERATIONS.INVOKE_EXTERNAL_API)) {
+      return res.status(200).json({
+        ok: true,
+        status: 'local_or_metadata_only',
+        capture_pipeline_version: CAPTURE_PIPELINE_VERSION,
+        title,
+        url,
+        message: 'Policy gate did not permit external API invocation.',
+        allowedOperations: gateDecision.allowedOperations,
+        audit: gateDecision.auditEntry,
+        metadata: { url, title }
+      });
+    }
+
+    const structured = await invokeExternalStructuredExtraction({ url, title, sanitized });
+    const filename = buildFilename(structured.title || title, url);
+    const markdown = renderKnowledgeMarkdown(structured, { url, sanitizer: sanitized, sanitizerVersion: SANITIZER_VERSION });
+    const graphFragment = buildGraphFragment(structured, { url, filename });
+
+    const assessPlugin = new AssessPlugin();
+    const assessment = await assessPlugin.execute({
+      structured,
+      markdown,
+      context
+    });
+
+    let github = null, graphGithub = null;
+    if (shouldWrite) {
+      github = await writeToGitHub({ content: markdown, filename });
+      if (writeGraphFragment) {
+        graphGithub = await writeToGitHub({
+          content: JSON.stringify(graphFragment, null, 2),
+          filename: filename.replace(/\.md$/, '.graph.json'),
+          basePathOverride: process.env.GRAPH_FRAGMENTS_PATH || 'graph/fragments'
+        });
+      }
+    }
+
+    res.json({
+      ok: true,
+      status: 'extracted_and_assessed',
+      capture_pipeline_version: CAPTURE_PIPELINE_VERSION,
+      title: structured.title,
+      filename,
+      structured,
+      markdown,
+      graphFragment,
+      assessment,
+      sanitizer: { version: sanitized.version, findings: sanitized.findings },
+      gate: { decision: gateDecision.decision, effectiveMode: gateDecision.effectiveMode, allowedOperations: gateDecision.allowedOperations, reason: gateDecision.reason },
+      github,
+      graphGithub
+    });
   } catch (e) {
     res.status(500).json({ ok: false, capture_pipeline_version: CAPTURE_PIPELINE_VERSION, error: e.message });
   }
