@@ -1,0 +1,70 @@
+{
+  "name": "Chad Mode — EA Decision View",
+  "version": "0.1",
+  "purpose": "Filter the GEAkr knowledge graph for architecture-decision-relevant concepts, signals, and risks.",
+  "audience": "Enterprise Architecture / TPO / architecture decision review",
+  "include_concepts_matching": [
+    "architecture",
+    "governance",
+    "risk",
+    "compliance",
+    "aia",
+    "directive",
+    "automated-decision",
+    "ai-governance",
+    "platform",
+    "data",
+    "capability",
+    "integration",
+    "security",
+    "privacy",
+    "audit",
+    "traceability",
+    "cost",
+    "finops",
+    "cloud",
+    "azure",
+    "mcp",
+    "skills",
+    "sovereign-compute",
+    "ai-strategy",
+    "tpo",
+    "ea"
+  ],
+  "preferred_node_types": [
+    "concept",
+    "knowledge",
+    "response",
+    "source"
+  ],
+  "preferred_edge_types": [
+    "supports",
+    "challenges",
+    "derived_from",
+    "promoted_to",
+    "uses_skill"
+  ],
+  "minimum_confidence": 45,
+  "show_branches": [
+    "main",
+    "work/geakr-enterprise",
+    "personal/pca",
+    "current-branch"
+  ],
+  "decision_lens": {
+    "questions": [
+      "What architecture decision is implied?",
+      "What governance or compliance risk is visible?",
+      "What platform or integration dependency is emerging?",
+      "What concept is supported across public, work, and PCA contexts?",
+      "What needs promotion to main before reuse?"
+    ],
+    "output_sections": [
+      "decision_signals",
+      "risks_and_constraints",
+      "platform_implications",
+      "capability_implications",
+      "promotion_candidates"
+    ]
+  }
+}

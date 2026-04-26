@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GEAkr Capture</title>
+  <style>
+    body{font-family:-apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:16px}
+    .card{max-width:720px;margin:0 auto}
+    input,button,textarea{width:100%;padding:12px;margin-top:8px;border-radius:10px;border:1px solid #ddd}
+    button{background:#2F6F73;color:#fff;border:none;font-weight:600}
+    .row{display:flex;gap:8px}
+    .row>*{flex:1}
+    small{color:#666}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>GEAkr Capture</h2>
+    <input id="url" placeholder="Paste URL here" />
+    <div class="row">
+      <label><input type="checkbox" id="write" /> Write to GitHub</label>
+    </div>
+    <button id="go">Extract</button>
+    <small>Only submit public or approved non-sensitive content.</small>
+    <textarea id="out" rows="20" placeholder="Output will appear here"></textarea>
+  </div>
+
+  <script>
+    const go = document.getElementById('go');
+    const out = document.getElementById('out');
+    go.onclick = async () => {
+      const url = document.getElementById('url').value.trim();
+      const write = document.getElementById('write').checked;
+      if(!url){ alert('Enter a URL'); return; }
+      out.value = 'Working...';
+      const resp = await fetch('/extract', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ url, writeToGitHub: write })
+      });
+      const data = await resp.json();
+      if(!data.ok){ out.value = 'Error: ' + data.error; return; }
+      out.value = data.markdown;
+    };
+  </script>
+</body>
+</html>

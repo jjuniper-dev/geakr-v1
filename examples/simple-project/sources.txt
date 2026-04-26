@@ -1,0 +1,4 @@
+# Sources
+
+- Community events page - https://example.com/events - General reference
+- Planning checklist - https://example.com/checklist - Tasks and structure

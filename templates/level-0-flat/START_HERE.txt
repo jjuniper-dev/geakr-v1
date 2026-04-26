@@ -1,0 +1,10 @@
+GEAkr Level 0 — Start Here
+
+1. Add project links to sources.txt
+2. Add working notes to notes.md
+3. Add or update the project summary in briefing.md
+4. List any supporting files in files_index.md
+5. Copy GEAKR_INSTRUCTIONS.md into your chatbot
+6. Ask: "Use this folder as my project context."
+
+Use only non-sensitive information unless your storage location, chatbot, connectors, and permissions are approved for the information.
