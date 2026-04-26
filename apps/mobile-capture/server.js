@@ -6,6 +6,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import OpenAI from 'openai';
 import { evaluatePolicyGate, OPERATIONS } from './policy/gate.js';
+import { enforcePolicy } from './core/control-plane/policy-enforcer.js';
+import { buildContext, addTraceEntry } from './core/control-plane/execution-context.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -181,12 +183,14 @@ app.post('/extract', authMiddleware, async (req, res) => {
     const source = getSourceConfig(req.body || {});
     const runtime = getRuntimeConfig(req.body || {});
 
-    const gateDecision = evaluatePolicyGate({
-      source: { url, classification: source.classification, contextLayer: source.contextLayer },
+    const context = buildContext({
+      req: { userOverride },
+      sanitized,
       runtime,
-      sanitizer: { version: sanitized.version, findings: sanitized.findings },
-      userOverride
+      source: { url, ...source }
     });
+
+    const gateDecision = await enforcePolicy(context);
 
     await appendGateAudit(gateDecision.auditEntry);
 
