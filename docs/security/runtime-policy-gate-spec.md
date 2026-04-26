@@ -63,6 +63,19 @@ Ordered most restrictive to least.
 1. **Per-capture override can only DOWNGRADE.** A user can opt a single capture into a stricter mode. Never looser.
 1. **Default is `metadata_only`.** If the environment does not declare a mode, the gate behaves as `metadata_only`.
 
+### 3.2 Hosting verification for `approved_enterprise`
+
+`approved_enterprise` mode requires hosting verification before the gate evaluates anything else. The `runtime.hosting` value:
+
+- **MUST be injected by a trusted deployment pipeline** (Azure DevOps release variable, GitHub Actions deploy step with OIDC, or equivalent)
+- **MUST NOT be user-settable** at runtime — no shell `export`, no config file edit, no UI toggle
+- **MUST be validated at gate initialization**, before any decision is made
+- **SHOULD be backed by a runtime probe** in v0.2 (managed identity check, instance metadata service, or signed deployment token verification) so the gate does not trust the env var alone
+
+If hosting validation fails at init, the gate forces effective mode to `local_only` and emits a `BLOCK` audit entry on the first attempted external call with `decision_reason: "hosting verification failed"`.
+
+This closes the obvious bypass: `export HOSTING=azure_approved` from a personal laptop.
+
 -----
 
 ## 4. Source classifications
@@ -169,7 +182,7 @@ type GateInput = {
   source: {
     url: string;
     classification: SourceClassification;
-    branchContext: 'main' | 'work' | 'personal';
+    contextLayer: 'public' | 'work' | 'personal';
   };
   runtime: {
     mode: RuntimeMode;
@@ -195,6 +208,8 @@ type GateDecision = {
 
 function evaluatePolicyGate(input: GateInput): GateDecision;
 ```
+
+Note: `contextLayer` is not a Git branch and must not be treated as an access-control boundary. It is a declared knowledge-context label used for policy decisions.
 
 -----
 
