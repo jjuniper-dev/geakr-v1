@@ -243,7 +243,29 @@ app.post('/extract', authMiddleware, async (req, res) => {
       github = await writeToGitHub({ content: markdown, filename });
       if (writeGraphFragment) graphGithub = await writeToGitHub({ content: JSON.stringify(graphFragment, null, 2), filename: graphFilename, basePathOverride: process.env.GRAPH_FRAGMENTS_PATH || 'graph/fragments' });
     }
-    res.json({ ok: true, status: 'extracted', capture_pipeline_version: CAPTURE_PIPELINE_VERSION, title: structured.title, filename, structured, markdown, graphFragment, graphFilename, sanitizer: { version: sanitized.version, findings: sanitized.findings }, gate: { decision: gateDecision.decision, effectiveMode: gateDecision.effectiveMode, allowedOperations: gateDecision.allowedOperations, reason: gateDecision.reason }, github, graphGithub });
+    const trace = [
+      'policy_gate:' + gateDecision.decision,
+      gateDecision.allowedOperations.includes(OPERATIONS.INVOKE_EXTERNAL_API) ? 'llm_extraction:allowed' : 'llm_extraction:blocked',
+      'markdown_render:success',
+      'graph_fragment:success'
+    ];
+
+    res.json({
+      ok: true,
+      status: 'extracted',
+      capture_pipeline_version: CAPTURE_PIPELINE_VERSION,
+      title: structured.title,
+      filename,
+      structured,
+      markdown,
+      graphFragment,
+      graphFilename,
+      sanitizer: { version: sanitized.version, findings: sanitized.findings },
+      gate: { decision: gateDecision.decision, effectiveMode: gateDecision.effectiveMode, allowedOperations: gateDecision.allowedOperations, reason: gateDecision.reason },
+      trace,
+      github,
+      graphGithub
+    });
   } catch (e) {
     res.status(500).json({ ok: false, capture_pipeline_version: CAPTURE_PIPELINE_VERSION, error: e.message });
   }
@@ -322,6 +344,14 @@ app.post('/extract-and-assess', authMiddleware, async (req, res) => {
       }
     }
 
+    const trace = [
+      'policy_gate:' + gateDecision.decision,
+      gateDecision.allowedOperations.includes(OPERATIONS.INVOKE_EXTERNAL_API) ? 'llm_extraction:allowed' : 'llm_extraction:blocked',
+      'markdown_render:success',
+      'graph_fragment:success',
+      'assess_plugin:executed'
+    ];
+
     res.json({
       ok: true,
       status: 'extracted_and_assessed',
@@ -334,6 +364,7 @@ app.post('/extract-and-assess', authMiddleware, async (req, res) => {
       assessment,
       sanitizer: { version: sanitized.version, findings: sanitized.findings },
       gate: { decision: gateDecision.decision, effectiveMode: gateDecision.effectiveMode, allowedOperations: gateDecision.allowedOperations, reason: gateDecision.reason },
+      trace,
       github,
       graphGithub
     });
