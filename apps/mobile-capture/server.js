@@ -10,6 +10,7 @@ import { buildContext, addTraceEntry } from './core/control-plane/execution-cont
 import { execute as controlPlaneExecute } from './core/control-plane/index.js';
 import { initializeAdapter, getProvider } from './core/llm-adapter/index.js';
 import { audit } from './core/audit-compliance/index.js';
+import { fetchReadable, sanitizeText, renderKnowledgeMarkdown, buildGraphFragment } from './core/baseline/index.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -105,11 +106,6 @@ function shortHash(s) { return crypto.createHash('sha256').update(s).digest('hex
 function hash12(s) { return crypto.createHash('sha256').update(s).digest('hex').slice(0, 12); }
 function buildFilename(title, url) { return `${today()}-${slugify(title || url)}-${shortHash(url)}.md`; }
 
-function sanitizerSeverity(type) {
-  if (['credit_card_like_number', 'bearer_token', 'api_key_like_value', 'sin_like_number'].includes(type)) return 'high';
-  if (['email', 'phone'].includes(type)) return 'medium';
-  return 'low';
-}
 
 function getRuntimeConfig(reqBody = {}) {
   return {
@@ -133,33 +129,6 @@ async function appendGateAudit(auditEntry) {
   await fs.appendFile(file, `${JSON.stringify(auditEntry)}\n`, 'utf-8');
 }
 
-async function fetchReadable(url) {
-  const { data } = await axios.get(url, { timeout: 15000 });
-  const $ = cheerio.load(data);
-  const title = ($('title').text() || '').trim();
-  $('script,style,noscript').remove();
-  const text = $('body').text().replace(/\s+/g, ' ').trim();
-  return { title, text: text.slice(0, 20000) };
-}
-
-function sanitizeText(input) {
-  let text = String(input || '');
-  const findings = [];
-  const replacements = [
-    { name: 'email', regex: /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, repl: '[REDACTED_EMAIL]' },
-    { name: 'phone', regex: /(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}/g, repl: '[REDACTED_PHONE]' },
-    { name: 'sin_like_number', regex: /\b\d{3}[-\s]?\d{3}[-\s]?\d{3}\b/g, repl: '[REDACTED_ID]' },
-    { name: 'credit_card_like_number', regex: /\b(?:\d[ -]*?){13,16}\b/g, repl: '[REDACTED_CARD]' },
-    { name: 'bearer_token', regex: /Bearer\s+[A-Za-z0-9._\-]+/g, repl: '[REDACTED_TOKEN]' },
-    { name: 'api_key_like_value', regex: /\b(?:api[_-]?key|secret|token|password)\s*[:=]\s*[^\s,;]+/gi, repl: '[REDACTED_SECRET]' }
-  ];
-  for (const r of replacements) {
-    const matches = text.match(r.regex) || [];
-    if (matches.length) findings.push({ category: r.name, severity: sanitizerSeverity(r.name), count: matches.length });
-    text = text.replace(r.regex, r.repl);
-  }
-  return { version: SANITIZER_VERSION, text, findings };
-}
 
 const knowledgeSchema = { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, source_type: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] }, summary: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 6 }, key_points: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 }, architecture_implications: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, geakr_implications: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, constraints_risks: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, concepts: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 } }, required: ['title','source_type','confidence','summary','key_points','architecture_implications','geakr_implications','constraints_risks','concepts'] };
 
@@ -198,10 +167,6 @@ async function invokeExternalStructuredExtraction({ url, title, sanitized }) {
   return result;
 }
 
-function list(items) { return items.map(x => `- ${x}`).join('\n'); }
-function renderKnowledgeMarkdown(data, { url, sanitizer }) { return `# ${data.title}\n\nsource: ${url}\nsource_type: ${data.source_type}\nstatus: extracted\nlast_updated: ${today()}\nconfidence: ${data.confidence}\npipeline_version: ${CAPTURE_PIPELINE_VERSION}\nsanitizer_version: ${SANITIZER_VERSION}\npca_state: captured\ntrust_state: provisional\nreconciliation_status: not_reconciled\nsource_layer: public\ncapture_method: mobile_url\nsanitizer_findings: ${JSON.stringify(sanitizer?.findings || [])}\nconcepts:\n${data.concepts.map(c => `  - ${slugify(c)}`).join('\n')}\n\n---\n\n## Summary\n${list(data.summary)}\n\n## Key Points\n${list(data.key_points)}\n\n## Architecture Implications\n${list(data.architecture_implications)}\n\n## GEAkr Implications\n${list(data.geakr_implications)}\n\n## Constraints / Risks\n${list(data.constraints_risks)}\n`; }
-
-function buildGraphFragment(data, { url, filename }) { const knowledgeId = `knowledge:${hash12(filename)}`; const sourceId = `source:${hash12(url)}`; const branch = process.env.GITHUB_BRANCH || 'main'; const nodes = [{ id: knowledgeId, type: 'knowledge', label: data.title, path: `knowledge/${filename}`, branch, source_layer: 'public', trust_state: 'provisional', status: 'extracted', pipeline_version: CAPTURE_PIPELINE_VERSION }, { id: sourceId, type: 'source', label: url, url, source_type: data.source_type, source_layer: 'public' }, { id: `branch:${slugify(branch)}`, type: 'branch', label: branch, branch }]; const edges = [{ id: `derived_from:${knowledgeId}->${sourceId}`, source: knowledgeId, target: sourceId, type: 'derived_from' }, { id: `belongs_to_branch:${knowledgeId}->branch:${slugify(branch)}`, source: knowledgeId, target: `branch:${slugify(branch)}`, type: 'belongs_to_branch' }]; for (const c of data.concepts) { const cid = `concept:${slugify(c)}`; nodes.push({ id: cid, type: 'concept', label: slugify(c).replaceAll('-', ' ') }); edges.push({ id: `supports:${knowledgeId}->${cid}`, source: knowledgeId, target: cid, type: 'supports' }); } return { version: GRAPH_FRAGMENT_VERSION, generated_at: new Date().toISOString(), nodes, edges }; }
 
 async function writeToGitHub({ content, filename, basePathOverride }) { const token = process.env.GITHUB_TOKEN; const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPO; const branch = process.env.GITHUB_BRANCH || 'main'; const basePath = basePathOverride || process.env.KNOWLEDGE_PATH || 'knowledge'; if (!token || !owner || !repo) return null; const filePath = `${basePath}/${filename}`; const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`; let sha; try { const existing = await axios.get(apiUrl, { headers: { Authorization: `Bearer ${token}` } }); sha = existing.data.sha; } catch (_) {} const put = await axios.put(apiUrl, { message: `Capture artifact: ${filename}`, content: Buffer.from(content).toString('base64'), branch, ...(sha ? { sha } : {}) }, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }); return { path: filePath, commit: put.data.commit?.sha, updatedExistingFile: Boolean(sha) }; }
 
@@ -269,7 +234,7 @@ app.post('/extract', authMiddleware, async (req, res) => {
 
     const structured = await invokeExternalStructuredExtraction({ url, title, sanitized });
     const filename = buildFilename(structured.title || title, url);
-    const markdown = renderKnowledgeMarkdown(structured, { url, sanitizer: sanitized });
+    const markdown = renderKnowledgeMarkdown(structured, { url, sanitizer: sanitized, sanitizerVersion: SANITIZER_VERSION });
     const graphFragment = buildGraphFragment(structured, { url, filename });
     const graphFilename = filename.replace(/\.md$/, '.graph.json');
     let github = null, graphGithub = null;
