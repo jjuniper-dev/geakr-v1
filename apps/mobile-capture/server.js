@@ -7,6 +7,7 @@ import path from 'path';
 import { evaluatePolicyGate, OPERATIONS } from './policy/gate.js';
 import { enforcePolicy } from './core/control-plane/policy-enforcer.js';
 import { buildContext, addTraceEntry } from './core/control-plane/execution-context.js';
+import { execute as controlPlaneExecute } from './core/control-plane/index.js';
 import { initializeAdapter, getProvider } from './core/llm-adapter/index.js';
 
 const app = express();
@@ -185,6 +186,18 @@ function renderKnowledgeMarkdown(data, { url, sanitizer }) { return `# ${data.ti
 function buildGraphFragment(data, { url, filename }) { const knowledgeId = `knowledge:${hash12(filename)}`; const sourceId = `source:${hash12(url)}`; const branch = process.env.GITHUB_BRANCH || 'main'; const nodes = [{ id: knowledgeId, type: 'knowledge', label: data.title, path: `knowledge/${filename}`, branch, source_layer: 'public', trust_state: 'provisional', status: 'extracted', pipeline_version: CAPTURE_PIPELINE_VERSION }, { id: sourceId, type: 'source', label: url, url, source_type: data.source_type, source_layer: 'public' }, { id: `branch:${slugify(branch)}`, type: 'branch', label: branch, branch }]; const edges = [{ id: `derived_from:${knowledgeId}->${sourceId}`, source: knowledgeId, target: sourceId, type: 'derived_from' }, { id: `belongs_to_branch:${knowledgeId}->branch:${slugify(branch)}`, source: knowledgeId, target: `branch:${slugify(branch)}`, type: 'belongs_to_branch' }]; for (const c of data.concepts) { const cid = `concept:${slugify(c)}`; nodes.push({ id: cid, type: 'concept', label: slugify(c).replaceAll('-', ' ') }); edges.push({ id: `supports:${knowledgeId}->${cid}`, source: knowledgeId, target: cid, type: 'supports' }); } return { version: GRAPH_FRAGMENT_VERSION, generated_at: new Date().toISOString(), nodes, edges }; }
 
 async function writeToGitHub({ content, filename, basePathOverride }) { const token = process.env.GITHUB_TOKEN; const owner = process.env.GITHUB_OWNER; const repo = process.env.GITHUB_REPO; const branch = process.env.GITHUB_BRANCH || 'main'; const basePath = basePathOverride || process.env.KNOWLEDGE_PATH || 'knowledge'; if (!token || !owner || !repo) return null; const filePath = `${basePath}/${filename}`; const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`; let sha; try { const existing = await axios.get(apiUrl, { headers: { Authorization: `Bearer ${token}` } }); sha = existing.data.sha; } catch (_) {} const put = await axios.put(apiUrl, { message: `Capture artifact: ${filename}`, content: Buffer.from(content).toString('base64'), branch, ...(sha ? { sha } : {}) }, { headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } }); return { path: filePath, commit: put.data.commit?.sha, updatedExistingFile: Boolean(sha) }; }
+
+// Phase 3 Pattern: Operations through Control Plane
+// Currently /extract calls functions directly for MVP compatibility.
+// Phase 3 will refactor this to route through controlPlane.execute():
+//
+// const fetchResult = await controlPlaneExecute({
+//   operation: 'fetch',
+//   input: { url, fetchReadable },
+//   context
+// });
+//
+// This keeps all operations under policy enforcement and provides a single trace point.
 
 app.post('/extract', authMiddleware, async (req, res) => {
   try {
