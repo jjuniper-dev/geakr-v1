@@ -4,10 +4,10 @@ import cheerio from 'cheerio';
 import crypto from 'crypto';
 import fs from 'fs/promises';
 import path from 'path';
-import OpenAI from 'openai';
 import { evaluatePolicyGate, OPERATIONS } from './policy/gate.js';
 import { enforcePolicy } from './core/control-plane/policy-enforcer.js';
 import { buildContext, addTraceEntry } from './core/control-plane/execution-context.js';
+import { initializeAdapter, getProvider } from './core/llm-adapter/index.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -21,7 +21,7 @@ const VALID_OPENAI_MODELS = ['gpt-4-turbo', 'gpt-4o', 'gpt-4o-mini', 'gpt-3.5-tu
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || DEFAULT_OPENAI_MODEL;
 
-let client = null;
+let llmProvider = null;
 
 function validateConfig() {
   const errors = [];
@@ -44,8 +44,8 @@ function validateConfig() {
     process.exit(1);
   }
 
-  client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  console.log(`✓ Config validated. Using model: ${OPENAI_MODEL}`);
+  llmProvider = initializeAdapter();
+  console.log(`✓ Config validated. LLM Adapter: ${llmProvider.name}, Model: ${llmProvider.model}`);
 }
 
 const requestCounts = new Map();
@@ -162,8 +162,21 @@ function sanitizeText(input) {
 const knowledgeSchema = { type: 'object', additionalProperties: false, properties: { title: { type: 'string' }, source_type: { type: 'string' }, confidence: { type: 'string', enum: ['low', 'medium', 'high'] }, summary: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 6 }, key_points: { type: 'array', items: { type: 'string' }, minItems: 2, maxItems: 8 }, architecture_implications: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, geakr_implications: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, constraints_risks: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 6 }, concepts: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 } }, required: ['title','source_type','confidence','summary','key_points','architecture_implications','geakr_implications','constraints_risks','concepts'] };
 
 async function invokeExternalStructuredExtraction({ url, title, sanitized }) {
-  const completion = await client.chat.completions.create({ model: OPENAI_MODEL, messages: [ { role: 'system', content: 'Extract only from provided sanitized content. Do not infer unsupported facts. Return JSON only.' }, { role: 'user', content: `URL: ${url}\nPage title: ${title}\nPipeline version: ${CAPTURE_PIPELINE_VERSION}\nSanitizer findings: ${JSON.stringify(sanitized.findings)}\n\nContent:\n${sanitized.text}` } ], temperature: 0.1, response_format: { type: 'json_schema', json_schema: { name: 'geakr_knowledge_extraction', strict: true, schema: knowledgeSchema } } });
-  return JSON.parse(completion.choices[0].message.content);
+  const provider = getProvider();
+  return await provider.structuredExtract({
+    schema: knowledgeSchema,
+    messages: [
+      {
+        role: 'system',
+        content: 'Extract only from provided sanitized content. Do not infer unsupported facts. Return JSON only.'
+      },
+      {
+        role: 'user',
+        content: `URL: ${url}\nPage title: ${title}\nPipeline version: ${CAPTURE_PIPELINE_VERSION}\nSanitizer findings: ${JSON.stringify(sanitized.findings)}\n\nContent:\n${sanitized.text}`
+      }
+    ],
+    temperature: 0.1
+  });
 }
 
 function list(items) { return items.map(x => `- ${x}`).join('\n'); }
