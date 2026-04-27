@@ -1,5 +1,6 @@
 import { getOpenAIProvider } from './providers/openai.js';
 import { getClaudeProvider } from './providers/claude.js';
+import { getLocalProvider } from './providers/local.js';
 import { getProviderForOperation } from './routing.js';
 
 const providers = {};
@@ -22,7 +23,9 @@ export function initializeAdapter() {
           console.log('✓ Claude provider initialized');
           break;
         case 'local':
-          console.warn('⚠️  Local provider not yet implemented');
+          providers.local = getLocalProvider();
+          if (!defaultProvider) defaultProvider = 'local';
+          console.log('✓ Local provider initialized');
           break;
         default:
           console.warn(`⚠️  Unknown provider: ${name}`);
