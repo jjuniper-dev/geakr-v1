@@ -92,6 +92,7 @@ export class RAG {
     const results = [];
 
     for (const docInput of documents) {
+      const startTime = Date.now();
       try {
         // Load document (parse, chunk)
         const { documentId, document, chunkCount } = await this.loader.loadDocument(docInput);
@@ -121,6 +122,28 @@ export class RAG {
         // Store document
         this.store.addDocument(documentId, document, embedding);
 
+        // Log to audit trail (non-blocking)
+        if (this.auditLogger && typeof this.auditLogger.logRAGIngestion === 'function') {
+          const durationMs = Date.now() - startTime;
+          this.auditLogger.logRAGIngestion({
+            documentId,
+            title: docInput.title,
+            classification: docInput.classification,
+            team: docInput.team,
+            userId: docInput.userId,
+            source: docInput.source,
+            chunkCount,
+            embeddingProvider: this.config.embedding.provider,
+            embeddingModel: this.config.embedding.model,
+            durationMs,
+            status: 'success',
+            error: null,
+            captureId: docInput.captureId
+          }).catch(err => {
+            console.warn('Failed to log RAG ingestion:', err.message);
+          });
+        }
+
         results.push({
           documentId,
           title: docInput.title,
@@ -129,6 +152,28 @@ export class RAG {
           status: 'ingested'
         });
       } catch (error) {
+        // Log failure to audit trail (non-blocking)
+        if (this.auditLogger && typeof this.auditLogger.logRAGIngestion === 'function') {
+          const durationMs = Date.now() - startTime;
+          this.auditLogger.logRAGIngestion({
+            documentId: `failed-${Date.now()}`,
+            title: docInput.title,
+            classification: docInput.classification,
+            team: docInput.team,
+            userId: docInput.userId,
+            source: docInput.source,
+            chunkCount: 0,
+            embeddingProvider: this.config.embedding.provider,
+            embeddingModel: this.config.embedding.model,
+            durationMs,
+            status: 'failed',
+            error: error.message,
+            captureId: docInput.captureId
+          }).catch(err => {
+            console.warn('Failed to log RAG ingestion error:', err.message);
+          });
+        }
+
         results.push({
           title: docInput.title,
           status: 'failed',
@@ -219,6 +264,29 @@ export class RAG {
         // Replace results with policy-filtered results
         result.results = policyResult.filtered;
         result.resultCount = policyResult.filtered.length;
+      }
+
+      // Log retrieval to audit trail (non-blocking)
+      if (this.auditLogger && typeof this.auditLogger.logRAGRetrieval === 'function') {
+        this.auditLogger.logRAGRetrieval({
+          query,
+          userId: options.userId || options.enforcementContext?.userId,
+          captureId: options.captureId || options.enforcementContext?.captureId,
+          runtimeMode: options.enforcementContext?.runtimeMode,
+          retrievedCount: result.resultCount,
+          returnedCount: result.results.length,
+          blockedCount: policyDetails?.blockedCount || 0,
+          classificationsQueried: result.results.map(r => r.classification),
+          blockedClassifications: policyDetails?.blockedClassifications || {},
+          policyEnforced,
+          policyDecision: policyDecision || 'NONE',
+          similarityThreshold: options.threshold || this.config.retrieval.similarityThreshold,
+          executionTimeMs: result.executionTimeMs,
+          documentsReturned: result.results.slice(0, 10),
+          sourceClassification: options.enforcementContext?.sourceClassification
+        }).catch(err => {
+          console.warn('Failed to log RAG retrieval:', err.message);
+        });
       }
 
       return {
