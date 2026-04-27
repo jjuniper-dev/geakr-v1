@@ -6,12 +6,19 @@ import {
   logPluginExecution
 } from './logger.js';
 
+import {
+  logRAGIngestion,
+  logRAGRetrieval
+} from './rag-logger.js';
+
 export const audit = {
   log,
   logGateDecision,
   logLLMCall,
   logDataAccess,
-  logPluginExecution
+  logPluginExecution,
+  logRAGIngestion,
+  logRAGRetrieval
 };
 
 export default audit;
