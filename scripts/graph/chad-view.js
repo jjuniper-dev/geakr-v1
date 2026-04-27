@@ -16,13 +16,27 @@ const ROOT = process.cwd();
 const GRAPH = path.join(ROOT, 'graph', 'graph.json');
 const CONV = path.join(ROOT, 'graph', 'convergence.json');
 const CFG = path.join(ROOT, 'graph', 'views', 'chad-mode.json');
+const OUT_VIEW = path.join(ROOT, 'graph', 'chad-view.json');
+const OUT_REPORT = path.join(ROOT, 'graph', 'chad-report.md');
+
+function fail(msg) {
+  console.error(`❌ ERROR: ${msg}`);
+  process.exit(1);
+}
 
 function readJSON(p) {
   if (!fs.existsSync(p)) {
-    console.error(`Missing ${p}`);
-    process.exit(1);
+    fail(`Missing required file: ${p}`);
   }
-  return JSON.parse(fs.readFileSync(p, 'utf8'));
+
+  let data;
+  try {
+    data = JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (e) {
+    fail(`Malformed JSON in ${p}: ${e.message}`);
+  }
+
+  return data;
 }
 
 function containsAny(hay, needles) {
@@ -45,6 +59,11 @@ function main() {
     return match && score >= cfg.minimum_confidence;
   });
 
+  // Guard: no concepts selected
+  if (selectedConcepts.length === 0) {
+    console.warn('⚠️  No concepts matched the filters. Output will be empty.');
+  }
+
   const conceptIds = new Set(selectedConcepts.map(c => c.id));
 
   // Pull supporting artifacts for selected concepts
@@ -59,6 +78,13 @@ function main() {
   });
 
   const nodes = graph.nodes.filter(n => conceptIds.has(n.id) || artifactIds.has(n.id) || n.type === 'branch');
+
+  // Explicit output structure with version
+  const output = {
+    version: "1.0",
+    nodes,
+    edges
+  };
 
   // Build report
   const top = [...selectedConcepts]
@@ -103,10 +129,11 @@ function main() {
 
   const outDir = path.join(ROOT, 'graph');
   fs.mkdirSync(outDir, { recursive: true });
-  fs.writeFileSync(path.join(outDir, 'chad-view.json'), JSON.stringify({ nodes, edges }, null, 2));
-  fs.writeFileSync(path.join(outDir, 'chad-report.md'), md);
+  fs.writeFileSync(OUT_VIEW, JSON.stringify(output, null, 2));
+  fs.writeFileSync(OUT_REPORT, md);
 
-  console.log('Wrote graph/chad-view.json and graph/chad-report.md');
+  console.log(`✓ Wrote ${OUT_VIEW}`);
+  console.log(`✓ Wrote ${OUT_REPORT}`);
 }
 
 main();
