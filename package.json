@@ -1,0 +1,22 @@
+{
+  "name": "geakr-v1",
+  "version": "1.0.0",
+  "description": "GEAkr v1.0 - Knowledge graph and architecture context framework",
+  "type": "module",
+  "scripts": {
+    "graph:validate": "node scripts/graph/validate.js",
+    "graph:chad": "node scripts/graph/chad-view.js",
+    "graph:build": "npm run graph:validate && npm run graph:chad"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "architecture",
+    "knowledge-graph",
+    "geakr"
+  ],
+  "author": "",
+  "license": "ISC",
+  "private": true
+}
